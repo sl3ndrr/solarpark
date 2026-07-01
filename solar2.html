@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solarpark Helios - Advanced Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        @keyframes pulse-glow {
+            0%, 100% { transform: scale(1); filter: drop-shadow(0 0 5px rgba(234, 179, 8, 0.4)); }
+            50% { transform: scale(1.02); filter: drop-shadow(0 0 15px rgba(234, 179, 8, 0.7)); }
+        }
+        .animate-pulse-glow {
+            animation: pulse-glow 4s infinite ease-in-out;
+        }
+        .glass {
+            background: rgba(15, 23, 42, 0.65);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 6px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, 0.3);
+            border-radius: 4px;
+        }
+        /* --- Energiefluss-Diagramm --- */
+        .flow-line {
+            stroke-dasharray: 9 7;
+            animation: dash-move 1.2s linear infinite;
+        }
+        @keyframes dash-move {
+            to { stroke-dashoffset: -16; }
+        }
+        .flow-fade {
+            transition: opacity 0.6s ease;
+        }
+        .flow-node-box {
+            transition: stroke 0.5s ease, filter 0.5s ease;
+        }
+        /* --- PR Gauge --- */
+        .gauge-ring {
+            transition: stroke-dashoffset 0.6s ease;
+        }
+        /* --- Event log --- */
+        .event-enter {
+            animation: event-slide-in 0.4s ease;
+        }
+        @keyframes event-slide-in {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen selection:bg-yellow-500 selection:text-slate-950">
+
+    <div class="container mx-auto p-4 md:p-8 space-y-6">
+
+        <!-- HEADER BLOCK -->
+        <header class="glass rounded-2xl p-6 flex flex-col md:flex-row justify-between items-center gap-4 shadow-2xl relative overflow-hidden">
+            <div class="absolute top-0 left-0 h-1 w-full bg-gradient-to-r from-yellow-500 via-orange-500 to-emerald-500"></div>
+            <div>
+                <div class="flex items-center gap-3">
+                    <div class="p-2.5 bg-yellow-500/10 rounded-xl text-yellow-400 border border-yellow-500/20">
+                        <svg class="w-8 h-8 animate-spin" style="animation-duration: 25s;" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 11H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707m12.728 0l-.707-.707M6.343 6.343l-.707-.707M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl md:text-3xl font-black tracking-tight bg-gradient-to-r from-yellow-400 via-orange-400 to-yellow-200 bg-clip-text text-transparent">
+                            SOLARPARK HELIOS
+                        </h1>
+                        <p class="text-xs text-slate-400 mt-0.5">Scada Control Platform v2.5 | Nennleistung: <span class="text-yellow-400 font-bold">1,20 MWp</span> | Verfügbarkeit: <span id="live-availability" class="text-emerald-400 font-bold">99.8%</span></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Simulation Controls in Header -->
+            <div class="flex flex-wrap items-center gap-4 justify-center md:justify-end">
+                <button id="cloud-toggle" onclick="toggleCloudSimulation()" class="px-4 py-2 rounded-xl text-xs font-semibold tracking-wide border border-slate-700 hover:border-yellow-500/50 bg-slate-900 transition-all flex items-center gap-2 group shadow-lg">
+                    <span id="cloud-status-dot" class="w-2 h-2 rounded-full bg-emerald-500"></span>
+                    <span id="cloud-btn-text">Gewitter/Wolken simulieren</span>
+                </button>
+                <button id="fault-toggle" onclick="triggerStringFault()" class="px-4 py-2 rounded-xl text-xs font-semibold tracking-wide border border-slate-700 hover:border-rose-500/50 bg-slate-900 transition-all flex items-center gap-2 group shadow-lg">
+                    <span class="w-2 h-2 rounded-full bg-slate-600"></span>
+                    <span>Strangfehler auslösen</span>
+                </button>
+                <div class="text-center md:text-right bg-slate-900/50 px-4 py-2 rounded-xl border border-slate-800">
+                    <div id="live-time" class="text-xl font-mono font-bold tracking-wider text-emerald-400">00:00:00</div>
+                    <div id="live-date" class="text-[10px] uppercase tracking-widest text-slate-400 mt-0.5">1. Juli 2026</div>
+                </div>
+            </div>
+        </header>
+
+        <!-- KPI DASHBOARD GRID -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+
+            <!-- CARD 1: LIVE LEISTUNG -->
+            <div class="glass rounded-2xl p-6 shadow-lg relative overflow-hidden group hover:border-yellow-500/30 transition-all duration-300">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex justify-between items-center">
+                    Aktuelle Leistung
+                    <span id="irradiation-badge" class="text-[10px] text-yellow-400 px-2 py-0.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 font-mono">780 W/m²</span>
+                </h3>
+                <div class="flex items-baseline gap-2 mt-4">
+                    <span id="live-power" class="text-4xl font-black text-yellow-400 font-mono tracking-tight transition-all duration-500">842.5</span>
+                    <span class="text-lg font-bold text-slate-400">kW</span>
+                </div>
+                <div class="mt-4 flex items-center gap-2 text-xs text-slate-300">
+                    <div class="flex-1 bg-slate-900 h-2 rounded-full overflow-hidden border border-slate-800">
+                        <div id="efficiency-bar" class="bg-gradient-to-r from-yellow-500 to-orange-500 h-full rounded-full transition-all duration-500" style="width: 70%;"></div>
+                    </div>
+                    <span id="efficiency-text" class="font-mono text-yellow-400 font-semibold">70.2%</span>
+                </div>
+            </div>
+
+            <!-- CARD 2: ERTRAG HEUTE & CO2 -->
+            <div class="glass rounded-2xl p-6 shadow-lg relative overflow-hidden group hover:border-emerald-500/30 transition-all duration-300">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Tagesbilanz & Umwelt</h3>
+                <div class="flex items-baseline gap-2 mt-4">
+                    <span id="live-today" class="text-4xl font-black text-emerald-400 font-mono tracking-tight">4.85</span>
+                    <span class="text-lg font-bold text-slate-400">MWh</span>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-800/60 flex justify-between text-xs">
+                    <span class="text-slate-400">CO₂ eingespart:</span>
+                    <span id="live-co2" class="text-emerald-400 font-bold font-mono">1.940 kg</span>
+                </div>
+            </div>
+
+            <!-- CARD 3: BATTERIE-SPEICHERSYSTEM -->
+            <div class="glass rounded-2xl p-6 shadow-lg relative overflow-hidden group hover:border-cyan-500/30 transition-all duration-300">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex justify-between items-center">
+                    Batteriespeicher (BESS)
+                    <span id="battery-status" class="text-[10px] text-cyan-400 px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 font-semibold">STANDBY</span>
+                </h3>
+                <div class="flex items-baseline gap-2 mt-4">
+                    <span id="battery-soc" class="text-4xl font-black text-cyan-400 font-mono tracking-tight">64.0</span>
+                    <span class="text-lg font-bold text-slate-400">%</span>
+                </div>
+                <div class="mt-4 flex items-center gap-2 text-xs text-slate-400">
+                    <div class="w-full bg-slate-900 h-2 rounded-md overflow-hidden p-0.5 border border-slate-800">
+                        <div id="battery-bar" class="bg-cyan-500 h-full rounded-sm transition-all duration-1000" style="width: 64%;"></div>
+                    </div>
+                    <span class="font-mono text-[10px]">500kWh</span>
+                </div>
+            </div>
+
+            <!-- CARD 4: FINANZEN & METEORO -->
+            <div class="glass rounded-2xl p-6 shadow-lg relative overflow-hidden group hover:border-orange-500/30 transition-all duration-300">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex justify-between items-center">
+                    Einspeisevergütung
+                    <span class="text-[10px] text-slate-500 font-mono">8,2 Ct/kWh</span>
+                </h3>
+                <div class="flex items-baseline gap-2 mt-4">
+                    <span id="live-revenue" class="text-4xl font-black text-orange-400 font-mono tracking-tight">397.70</span>
+                    <span class="text-lg font-bold text-slate-400">€</span>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-800/60 flex justify-between text-xs">
+                    <span class="text-slate-400">Modultemperatur:</span>
+                    <span class="text-cyan-400 font-semibold font-mono"><span id="live-temp">24.5</span> °C</span>
+                </div>
+            </div>
+
+            <!-- CARD 5: PERFORMANCE RATIO (NEW) -->
+            <div class="glass rounded-2xl p-6 shadow-lg relative overflow-hidden group hover:border-fuchsia-500/30 transition-all duration-300 flex items-center gap-4">
+                <div class="relative w-20 h-20 flex-shrink-0">
+                    <svg viewBox="0 0 80 80" class="w-20 h-20 -rotate-90">
+                        <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(148,163,184,0.15)" stroke-width="8"></circle>
+                        <circle id="pr-ring" class="gauge-ring" cx="40" cy="40" r="34" fill="none" stroke="#e879f9" stroke-width="8" stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="213.6"></circle>
+                    </svg>
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <span id="pr-value" class="text-lg font-black font-mono text-fuchsia-400">0%</span>
+                    </div>
+                </div>
+                <div>
+                    <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Performance Ratio</h3>
+                    <p class="text-[11px] text-slate-500 mt-1 leading-snug">Realertrag vs. theoretischer Ertrag, temperaturbereinigt</p>
+                    <p class="text-[10px] text-slate-500 mt-1">Verschmutzungsindex: <span class="text-slate-300 font-mono">98.1%</span></p>
+                </div>
+            </div>
+
+            <!-- CARD 6: NETZANBINDUNG (NEW) -->
+            <div class="glass rounded-2xl p-6 shadow-lg relative overflow-hidden group hover:border-sky-500/30 transition-all duration-300">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex justify-between items-center">
+                    Netzanbindung (110 kV)
+                    <span id="grid-flow-badge" class="text-[10px] text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 font-semibold">EINSPEISUNG</span>
+                </h3>
+                <div class="flex items-baseline gap-2 mt-4">
+                    <span id="live-grid-power" class="text-4xl font-black text-sky-400 font-mono tracking-tight">760.0</span>
+                    <span class="text-lg font-bold text-slate-400">kW</span>
+                </div>
+                <div class="mt-3 pt-3 border-t border-slate-800/60 flex justify-between text-xs">
+                    <span class="text-slate-400">Netzfrequenz:</span>
+                    <span id="live-freq" class="text-sky-400 font-bold font-mono">50.00 Hz</span>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ENERGIEFLUSS-DIAGRAMM (NEW SIGNATURE COMPONENT) -->
+        <section class="glass rounded-2xl p-6 shadow-xl">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    Live-Energiefluss
+                </h3>
+                <p class="text-[11px] text-slate-500">PV-Generator → AC-Sammelschiene → Batteriespeicher / Netz</p>
+            </div>
+            <div class="w-full overflow-x-auto">
+                <svg id="flow-svg" viewBox="0 0 900 260" class="w-full min-w-[640px]" style="height: 260px;">
+                    <defs>
+                        <marker id="arrow-amber" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#f59e0b"></path></marker>
+                        <marker id="arrow-cyan" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#22d3ee"></path></marker>
+                        <marker id="arrow-emerald" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#10b981"></path></marker>
+                        <marker id="arrow-rose" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#fb7185"></path></marker>
+                        <marker id="arrow-slate" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#64748b"></path></marker>
+                    </defs>
+
+                    <!-- Flow paths (drawn first, behind nodes) -->
+                    <path id="path-pv-wr" d="M175,130 L385,130" stroke="#f59e0b" stroke-width="3" fill="none" class="flow-line flow-fade" marker-end="url(#arrow-amber)" opacity="0"></path>
+                    <path id="path-wr-batt" d="M448,168 L448,205" stroke="#22d3ee" stroke-width="3" fill="none" class="flow-line flow-fade" marker-end="url(#arrow-cyan)" opacity="0"></path>
+                    <path id="path-batt-wr" d="M478,205 L478,168" stroke="#22d3ee" stroke-width="3" fill="none" class="flow-line flow-fade" marker-end="url(#arrow-cyan)" opacity="0"></path>
+                    <path id="path-wr-grid" d="M535,122 L745,122" stroke="#10b981" stroke-width="3" fill="none" class="flow-line flow-fade" marker-end="url(#arrow-emerald)" opacity="0"></path>
+                    <path id="path-grid-wr" d="M745,150 L535,150" stroke="#fb7185" stroke-width="3" fill="none" class="flow-line flow-fade" marker-end="url(#arrow-rose)" opacity="0"></path>
+                    <path id="path-wr-aux" d="M462,95 L462,58" stroke="#64748b" stroke-width="2.5" fill="none" class="flow-line flow-fade" marker-end="url(#arrow-slate)" opacity="0"></path>
+
+                    <!-- Hilfsbetrieb node -->
+                    <g transform="translate(392,14)">
+                        <rect width="140" height="42" rx="10" fill="rgba(30,41,59,0.7)" stroke="#334155" stroke-width="1.5"></rect>
+                        <text x="70" y="17" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="700" letter-spacing="0.5">HILFSBETRIEB</text>
+                        <text id="flow-aux-label" x="70" y="33" text-anchor="middle" fill="#cbd5e1" font-size="13" font-family="monospace" font-weight="700">1.8 kW</text>
+                    </g>
+
+                    <!-- PV node -->
+                    <g transform="translate(20,95)">
+                        <rect id="node-pv" class="flow-node-box" width="155" height="70" rx="14" fill="rgba(30,41,59,0.75)" stroke="#f59e0b" stroke-width="1.5"></rect>
+                        <text x="77" y="24" text-anchor="middle" fill="#fbbf24" font-size="11" font-weight="700" letter-spacing="0.5">PV-GENERATOR</text>
+                        <text id="flow-pv-label" x="77" y="48" text-anchor="middle" fill="#fde68a" font-size="17" font-family="monospace" font-weight="800">842.5 kW</text>
+                        <text x="77" y="62" text-anchor="middle" fill="#94a3b8" font-size="9">DC-Feld, 4.320 Module</text>
+                    </g>
+
+                    <!-- WR / AC bus node -->
+                    <g transform="translate(385,95)">
+                        <rect id="node-wr" class="flow-node-box" width="150" height="70" rx="14" fill="rgba(30,41,59,0.75)" stroke="#475569" stroke-width="1.5"></rect>
+                        <text x="75" y="24" text-anchor="middle" fill="#e2e8f0" font-size="11" font-weight="700" letter-spacing="0.5">AC-SAMMELSCHIENE</text>
+                        <text x="75" y="46" text-anchor="middle" fill="#94a3b8" font-size="9">Wechselrichter WR-1..3</text>
+                        <text id="flow-wr-eff-label" x="75" y="60" text-anchor="middle" fill="#64748b" font-size="9" font-family="monospace">η 96.0%</text>
+                    </g>
+
+                    <!-- Battery node -->
+                    <g transform="translate(388,205)">
+                        <rect id="node-batt" class="flow-node-box" width="145" height="45" rx="12" fill="rgba(30,41,59,0.75)" stroke="#22d3ee" stroke-width="1.5"></rect>
+                        <text x="72" y="17" text-anchor="middle" fill="#67e8f9" font-size="10" font-weight="700" letter-spacing="0.5">BATTERIE</text>
+                        <text id="flow-batt-label" x="72" y="34" text-anchor="middle" fill="#a5f3fc" font-size="13" font-family="monospace" font-weight="700">64.0% · 0 kW</text>
+                    </g>
+
+                    <!-- Grid node -->
+                    <g transform="translate(745,95)">
+                        <rect id="node-grid" class="flow-node-box" width="140" height="70" rx="14" fill="rgba(30,41,59,0.75)" stroke="#10b981" stroke-width="1.5"></rect>
+                        <text x="70" y="24" text-anchor="middle" fill="#6ee7b7" font-size="11" font-weight="700" letter-spacing="0.5">ÜBERTRAGUNGSNETZ</text>
+                        <text id="flow-grid-label" x="70" y="48" text-anchor="middle" fill="#a7f3d0" font-size="16" font-family="monospace" font-weight="800">760.0 kW</text>
+                        <text id="flow-grid-sub-label" x="70" y="62" text-anchor="middle" fill="#94a3b8" font-size="9">Einspeisung</text>
+                    </g>
+                </svg>
+            </div>
+        </section>
+
+        <!-- LIVE WECHSELRICHTER MATRIX -->
+        <section class="glass rounded-2xl p-6 shadow-xl">
+            <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 mb-4 flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-yellow-400 animate-ping"></span>
+                Wechselrichter-Statusmatrix (String-Inverter)
+            </h3>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex justify-between items-center">
+                    <div>
+                        <div class="text-xs text-slate-400 font-medium">Block A (WR-1)</div>
+                        <div id="wr1-power" class="text-lg font-mono font-bold text-slate-200 mt-1">280.4 kW</div>
+                    </div>
+                    <div class="text-right">
+                        <span id="wr1-status" class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20">ONLINE</span>
+                        <div id="wr1-eff" class="text-xs font-mono text-slate-400 mt-1">Eff: 98.4%</div>
+                    </div>
+                </div>
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex justify-between items-center">
+                    <div>
+                        <div class="text-xs text-slate-400 font-medium">Block B (WR-2)</div>
+                        <div id="wr2-power" class="text-lg font-mono font-bold text-slate-200 mt-1">281.1 kW</div>
+                    </div>
+                    <div class="text-right">
+                        <span id="wr2-status" class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20">ONLINE</span>
+                        <div id="wr2-eff" class="text-xs font-mono text-slate-400 mt-1">Eff: 98.2%</div>
+                    </div>
+                </div>
+                <div class="bg-slate-900/60 p-4 rounded-xl border border-slate-800 flex justify-between items-center">
+                    <div>
+                        <div class="text-xs text-slate-400 font-medium">Block C (WR-3)</div>
+                        <div id="wr3-power" class="text-lg font-mono font-bold text-slate-200 mt-1">281.0 kW</div>
+                    </div>
+                    <div class="text-right">
+                        <span id="wr3-status" class="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 font-bold border border-emerald-500/20">ONLINE</span>
+                        <div id="wr3-eff" class="text-xs font-mono text-slate-400 mt-1">Eff: 98.5%</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- DC-STRANG-MATRIX (NEW) -->
+        <section class="glass rounded-2xl p-6 shadow-xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+                    DC-Strang-Übersicht (12 Stränge, 4 pro Wechselrichter)
+                </h3>
+                <span class="text-[11px] text-slate-500">Nennwerte: 32 A / 780 V je Strang</span>
+            </div>
+            <div id="string-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"></div>
+        </section>
+
+        <!-- CHARTS GRAPHICS SECTION -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+
+            <!-- REALTIME ROLLING LEISTUNGS-CHART -->
+            <div class="glass rounded-2xl p-6 shadow-lg flex flex-col justify-between lg:col-span-1">
+                <div>
+                    <h3 class="text-base font-bold text-slate-200 flex items-center justify-between">
+                        Echtzeit-Leistung
+                        <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                    </h3>
+                    <p class="text-[11px] text-slate-400 mb-4">Live-Datenstrom (3-Sekunden-Takt) in kW</p>
+                </div>
+                <div class="h-56">
+                    <canvas id="realtimeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- WOCHEN-CHART -->
+            <div class="glass rounded-2xl p-6 shadow-lg flex flex-col justify-between lg:col-span-1">
+                <div>
+                    <h3 class="text-base font-bold text-slate-200">Ertrag der letzten 7 Tage</h3>
+                    <p class="text-[11px] text-slate-400 mb-4">Tägliche kumulierte Produktion in MWh</p>
+                </div>
+                <div class="h-56">
+                    <canvas id="weeklyChart"></canvas>
+                </div>
+            </div>
+
+            <!-- JAHRES-CHART -->
+            <div class="glass rounded-2xl p-6 shadow-lg flex flex-col justify-between lg:col-span-1">
+                <div>
+                    <h3 class="text-base font-bold text-slate-200">Jahresübersicht 2026</h3>
+                    <p class="text-[11px] text-slate-400 mb-4">Monatlicher Ertrag (Soll vs. Ist)</p>
+                </div>
+                <div class="h-56">
+                    <canvas id="yearlyChart"></canvas>
+                </div>
+            </div>
+
+            <!-- KURZFRISTPROGNOSE (NEW) -->
+            <div class="glass rounded-2xl p-6 shadow-lg flex flex-col justify-between lg:col-span-1">
+                <div>
+                    <h3 class="text-base font-bold text-slate-200">Kurzfristprognose</h3>
+                    <p class="text-[11px] text-slate-400 mb-4">Erwartete Einstrahlung, nächste 6 Stunden</p>
+                </div>
+                <div id="forecast-rows" class="space-y-2.5 text-xs"></div>
+            </div>
+
+        </div>
+
+        <!-- SYSTEMMELDUNGEN / EVENT LOG (NEW) -->
+        <section class="glass rounded-2xl p-6 shadow-xl">
+            <div class="flex items-center justify-between mb-4">
+                <h3 class="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+                    Systemmeldungen
+                </h3>
+                <span class="text-[11px] text-slate-500">Automatisches Ereignisprotokoll</span>
+            </div>
+            <div id="event-log" class="space-y-2 max-h-64 overflow-y-auto custom-scrollbar pr-2"></div>
+        </section>
+
+    </div>
+
+    <!-- CODE LOGIC & SIMULATION SYSTEM -->
+    <script>
+        // ============================================================
+        // GLOBALER SIMULATIONSSTATUS
+        // ============================================================
+        let cloudSimulationActive = false;
+        let basePower = 842.5;
+        let todayEnergy = 4.8520;
+        let batterySoc = 64.20;
+        const maxBatteryCapacity = 500; // kWh
+        const auxLoadKw = 1.8; // Hilfsbetrieb: SCADA, Kühlung, Trafo-Eigenverbrauch
+        let gridFrequency = 50.00;
+        let previousBatteryStatus = "STANDBY";
+        let previousGridDirection = "EXPORT";
+        let nightModeAnnounced = false;
+        let dayModeAnnounced = true;
+
+        // --- DC-Strang-Zustand: 12 Stränge, 4 je Wechselrichter ---
+        const stringCount = 12;
+        const stringFaultUntil = new Array(stringCount).fill(0); // "Takt-Countdown" bis Fehler behoben
+        let simTick = 0;
+
+        // ============================================================
+        // EVENT LOG
+        // ============================================================
+        function logEvent(text, level) {
+            const log = document.getElementById('event-log');
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('de-DE', { hour12: false });
+
+            const colors = {
+                info: 'bg-slate-500',
+                success: 'bg-emerald-400',
+                warning: 'bg-amber-400',
+                danger: 'bg-rose-500'
+            };
+            const textColors = {
+                info: 'text-slate-300',
+                success: 'text-emerald-300',
+                warning: 'text-amber-300',
+                danger: 'text-rose-300'
+            };
+
+            const row = document.createElement('div');
+            row.className = 'event-enter flex items-start gap-3 text-xs bg-slate-900/50 px-3 py-2 rounded-lg border border-slate-800/60';
+            row.innerHTML = `
+                <span class="mt-0.5 w-2 h-2 rounded-full ${colors[level] || colors.info} flex-shrink-0"></span>
+                <span class="font-mono text-slate-500 flex-shrink-0">${timeStr}</span>
+                <span class="${textColors[level] || textColors.info}">${text}</span>
+            `;
+            log.prepend(row);
+
+            // Verlauf auf 40 Einträge begrenzen
+            while (log.children.length > 40) {
+                log.removeChild(log.lastChild);
+            }
+        }
+
+        // ============================================================
+        // DC-STRANG-MATRIX: INITIALISIERUNG
+        // ============================================================
+        function buildStringGrid() {
+            const grid = document.getElementById('string-grid');
+            let html = '';
+            for (let i = 0; i < stringCount; i++) {
+                const wrGroup = Math.floor(i / 4) + 1;
+                html += `
+                    <div id="string-card-${i}" class="bg-slate-900/60 rounded-xl border border-slate-800 p-3">
+                        <div class="flex justify-between items-center">
+                            <span class="text-[10px] text-slate-500 font-semibold">STR-${(i + 1).toString().padStart(2, '0')}</span>
+                            <span id="string-status-${i}" class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">OK</span>
+                        </div>
+                        <div id="string-current-${i}" class="text-sm font-mono font-bold text-slate-200 mt-1.5">0.0 A</div>
+                        <div id="string-voltage-${i}" class="text-[10px] font-mono text-slate-500">0 V · WR-${wrGroup}</div>
+                    </div>
+                `;
+            }
+            grid.innerHTML = html;
+        }
+
+        function triggerStringFault() {
+            // Manuell einen zufälligen, noch intakten Strang in einen Fehlerzustand versetzen
+            const healthy = [];
+            for (let i = 0; i < stringCount; i++) {
+                if (stringFaultUntil[i] <= simTick) healthy.push(i);
+            }
+            if (healthy.length === 0) return;
+            const idx = healthy[Math.floor(Math.random() * healthy.length)];
+            stringFaultUntil[idx] = simTick + 8 + Math.floor(Math.random() * 6); // 24-42s Fehlerdauer
+            logEvent(`String STR-${(idx + 1).toString().padStart(2, '0')}: Minderleistung erkannt (Verschattung/Diskonnekt vermutet)`, 'danger');
+        }
+
+        function updateStringGrid(currentPower) {
+            const perStringBase = currentPower / stringCount;
+            for (let i = 0; i < stringCount; i++) {
+                const faulty = stringFaultUntil[i] > simTick;
+                const statusEl = document.getElementById(`string-status-${i}`);
+                const currentEl = document.getElementById(`string-current-${i}`);
+                const voltageEl = document.getElementById(`string-voltage-${i}`);
+
+                if (faulty && currentPower > 0) {
+                    const current = 1.5 + Math.random() * 1.5;
+                    const voltage = 120 + Math.random() * 60;
+                    currentEl.innerText = current.toFixed(1) + " A";
+                    voltageEl.innerText = Math.round(voltage) + " V · WR-" + (Math.floor(i / 4) + 1);
+                    statusEl.innerText = "FEHLER";
+                    statusEl.className = "text-[9px] px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-400 border border-rose-500/20 font-bold animate-pulse";
+                } else if (currentPower > 0) {
+                    const current = Math.max(0, (perStringBase / 24.4) + (Math.random() - 0.5) * 0.6);
+                    const voltage = 720 + (Math.random() - 0.5) * 30;
+                    currentEl.innerText = current.toFixed(1) + " A";
+                    voltageEl.innerText = Math.round(voltage) + " V · WR-" + (Math.floor(i / 4) + 1);
+                    statusEl.innerText = "OK";
+                    statusEl.className = "text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold";
+                } else {
+                    currentEl.innerText = "0.0 A";
+                    voltageEl.innerText = "0 V · WR-" + (Math.floor(i / 4) + 1);
+                    statusEl.innerText = "NACHT";
+                    statusEl.className = "text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 border border-slate-700 font-bold";
+                }
+
+                // Zufällige, seltene spontane Fehler (nur tagsüber, sehr geringe Wahrscheinlichkeit je Takt)
+                if (!faulty && currentPower > 50 && Math.random() < 0.0015) {
+                    stringFaultUntil[i] = simTick + 6 + Math.floor(Math.random() * 8);
+                    logEvent(`String STR-${(i + 1).toString().padStart(2, '0')}: Minderleistung erkannt (Verschattung/Diskonnekt vermutet)`, 'danger');
+                }
+                // Fehler-Ende protokollieren
+                if (!faulty && stringFaultUntil[i] === simTick) {
+                    logEvent(`String STR-${(i + 1).toString().padStart(2, '0')}: Normalbetrieb wiederhergestellt`, 'success');
+                }
+            }
+        }
+
+        // ============================================================
+        // KURZFRISTPROGNOSE (deterministisches Einstrahlungsmodell)
+        // ============================================================
+        function estimateIrradiationForHour(hour, cloudActive) {
+            if (hour < 6 || hour > 21) return 0;
+            const timeFactor = Math.sin((hour - 6) / 15 * Math.PI);
+            let val = timeFactor * 950;
+            if (cloudActive) val *= 0.4;
+            return Math.max(0, Math.round(val));
+        }
+
+        function iconForIrradiation(val) {
+            if (val <= 0) return '🌙';
+            if (val < 200) return '☁️';
+            if (val < 550) return '⛅';
+            return '☀️';
+        }
+
+        function updateForecast() {
+            const now = new Date();
+            const currentHour = now.getHours();
+            const container = document.getElementById('forecast-rows');
+            let html = '';
+            for (let h = 1; h <= 6; h++) {
+                const futureHour = (currentHour + h) % 24;
+                const irr = estimateIrradiationForHour(futureHour, false);
+                const icon = iconForIrradiation(irr);
+                const barWidth = Math.min(100, (irr / 950) * 100);
+                html += `
+                    <div class="flex items-center gap-2">
+                        <span class="w-9 text-slate-400 font-mono text-[11px]">${futureHour.toString().padStart(2, '0')}:00</span>
+                        <span class="w-5 text-center">${icon}</span>
+                        <div class="flex-1 bg-slate-900 h-1.5 rounded-full overflow-hidden border border-slate-800">
+                            <div class="bg-gradient-to-r from-yellow-500 to-orange-400 h-full rounded-full" style="width:${barWidth}%;"></div>
+                        </div>
+                        <span class="w-14 text-right text-slate-500 font-mono text-[10px]">${irr} W/m²</span>
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+        }
+
+        // ============================================================
+        // ENERGIEFLUSS-DIAGRAMM
+        // ============================================================
+        function setFlow(pathId, active, magnitudeKw, maxKw) {
+            const el = document.getElementById(pathId);
+            el.style.opacity = active ? '0.95' : '0';
+            if (active) {
+                const ratio = Math.min(1, Math.max(0.08, magnitudeKw / maxKw));
+                const duration = (1.6 - ratio * 1.2).toFixed(2); // schnellerer Fluss = kürzere Dauer
+                el.style.animationDuration = duration + 's';
+            }
+        }
+
+        function updateFlowDiagram(pvPower, battChargeKw, battDischargeKw, gridFlowKw) {
+            document.getElementById('flow-pv-label').innerText = pvPower.toFixed(1) + ' kW';
+            document.getElementById('flow-aux-label').innerText = auxLoadKw.toFixed(1) + ' kW';
+            document.getElementById('flow-batt-label').innerText = batterySoc.toFixed(1) + '% · ' +
+                (battChargeKw > 0 ? '+' + battChargeKw.toFixed(0) : battDischargeKw > 0 ? '-' + battDischargeKw.toFixed(0) : '0') + ' kW';
+
+            const gridNode = document.getElementById('flow-grid-label');
+            const gridSub = document.getElementById('flow-grid-sub-label');
+            gridNode.innerText = Math.abs(gridFlowKw).toFixed(1) + ' kW';
+            gridSub.innerText = gridFlowKw >= 0 ? 'Einspeisung' : 'Bezug (Netzstrom)';
+            gridNode.setAttribute('fill', gridFlowKw >= 0 ? '#a7f3d0' : '#fecdd3');
+
+            setFlow('path-pv-wr', pvPower > 0.5, pvPower, 1200);
+            setFlow('path-wr-batt', battChargeKw > 0.5, battChargeKw, 200);
+            setFlow('path-batt-wr', battDischargeKw > 0.5, battDischargeKw, 200);
+            setFlow('path-wr-grid', gridFlowKw > 0.5, gridFlowKw, 1200);
+            setFlow('path-grid-wr', gridFlowKw < -0.5, Math.abs(gridFlowKw), 50);
+            setFlow('path-wr-aux', pvPower > 0 || battDischargeKw > 0 || gridFlowKw < 0, auxLoadKw, auxLoadKw * 1.2);
+
+            const nodePv = document.getElementById('node-pv');
+            nodePv.setAttribute('stroke', pvPower > 0.5 ? '#f59e0b' : '#334155');
+        }
+
+        // ============================================================
+        // UHRZEIT & DATUM
+        // ============================================================
+        function updateClock() {
+            const now = new Date();
+            document.getElementById('live-time').innerText = now.toLocaleTimeString('de-DE', { hour12: false });
+            const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            document.getElementById('live-date').innerText = now.toLocaleDateString('de-DE', options);
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        // ============================================================
+        // MANUELLE WOLKENSIMULATION TOGGLE
+        // ============================================================
+        function toggleCloudSimulation() {
+            cloudSimulationActive = !cloudSimulationActive;
+            const dot = document.getElementById('cloud-status-dot');
+            const btnText = document.getElementById('cloud-btn-text');
+
+            if (cloudSimulationActive) {
+                dot.className = "w-2 h-2 rounded-full bg-amber-500 animate-pulse";
+                btnText.innerText = "Wolkenfront aktiv (Leistung gedrosselt)";
+                btnText.classList.add("text-amber-400");
+                logEvent('Manuelle Wolkenfront-Simulation aktiviert – Einstrahlung stark reduziert', 'warning');
+            } else {
+                dot.className = "w-2 h-2 rounded-full bg-emerald-500";
+                btnText.innerText = "Gewitter/Wolken simulieren";
+                btnText.classList.remove("text-amber-400");
+                logEvent('Wolkenfront-Simulation deaktiviert – Normalbetrieb', 'success');
+            }
+            simulateLiveSolarPark();
+        }
+
+        // ============================================================
+        // HAUPT-SIMULATIONSSCHLEIFE
+        // ============================================================
+        function simulateLiveSolarPark() {
+            simTick++;
+            const now = new Date();
+            const currentHour = now.getHours();
+
+            let irradiation = 0;
+            let temp = 14.2;
+
+            // 1. Tag-/Nachtzyklus & Einstrahlung (Physik-Modell)
+            if (currentHour >= 6 && currentHour <= 21) {
+                const timeFactor = Math.sin((currentHour - 6) / 15 * Math.PI);
+                irradiation = timeFactor * 950 + (Math.random() - 0.5) * 40;
+                temp = 16 + (timeFactor * 12) + (Math.random() - 0.5) * 1.5;
+
+                if (cloudSimulationActive) {
+                    irradiation = irradiation * 0.15;
+                    temp = temp - 3.5;
+                }
+                if (!dayModeAnnounced) {
+                    logEvent('Sonnenaufgang erkannt – Anlage geht in Produktionsbetrieb', 'success');
+                    dayModeAnnounced = true;
+                    nightModeAnnounced = false;
+                }
+            } else {
+                irradiation = 0;
+                temp = 12.0 + (Math.random() - 0.5);
+                if (!nightModeAnnounced) {
+                    logEvent('Sonnenuntergang erkannt – Anlage geht in Nachtmodus (Hilfsbetrieb aktiv)', 'info');
+                    nightModeAnnounced = true;
+                    dayModeAnnounced = false;
+                }
+            }
+            if (irradiation < 0) irradiation = 0;
+
+            // 2. Leistungsberechnung inkl. Temperaturderating (Anlagen-Peak = 1200kW)
+            const tempDerate = 1 - Math.max(0, temp - 25) * 0.004;
+            let currentPower = (irradiation / 1000) * 1200 * 0.96 * tempDerate;
+            if (currentPower > 1200) currentPower = 1200;
+            if (currentPower < 0) currentPower = 0;
+
+            // Performance Ratio: realer vs. theoretischer Ertrag bei aktueller Einstrahlung
+            const theoreticalPower = (irradiation / 1000) * 1200;
+            const pr = theoreticalPower > 5 ? Math.min(100, (currentPower / theoreticalPower) * 100) : 0;
+            const prRing = document.getElementById('pr-ring');
+            const circumference = 213.6;
+            prRing.style.strokeDashoffset = (circumference - (pr / 100) * circumference).toFixed(1);
+            document.getElementById('pr-value').innerText = (theoreticalPower > 5 ? pr.toFixed(0) : '0') + '%';
+
+            // 3. Statusänderung der Komponentenmatrix
+            const efficiency = currentPower > 0 ? (currentPower / 1200 * 100).toFixed(1) : "0.0";
+            document.getElementById('live-power').innerText = currentPower.toFixed(1);
+            document.getElementById('irradiation-badge').innerText = Math.round(irradiation) + " W/m²";
+            document.getElementById('efficiency-bar').style.width = `${efficiency}%`;
+            document.getElementById('efficiency-text').innerText = `${efficiency}%`;
+            document.getElementById('live-temp').innerText = temp.toFixed(1);
+
+            // Inverter-Split Simulation
+            if (currentPower > 0) {
+                const wrShare = currentPower / 3;
+                document.getElementById('wr1-power').innerText = (wrShare + (Math.random() - 0.5) * 3).toFixed(1) + " kW";
+                document.getElementById('wr2-power').innerText = (wrShare + (Math.random() - 0.5) * 3).toFixed(1) + " kW";
+                document.getElementById('wr3-power').innerText = (wrShare + (Math.random() - 0.5) * 3).toFixed(1) + " kW";
+
+                const wrStatusClass = cloudSimulationActive ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
+                const wrStatusText = cloudSimulationActive ? "REDUCED" : "ONLINE";
+
+                ['wr1-status', 'wr2-status', 'wr3-status'].forEach(id => {
+                    const el = document.getElementById(id);
+                    el.className = `px-2 py-0.5 rounded text-[10px] font-bold border ${wrStatusClass}`;
+                    el.innerText = wrStatusText;
+                });
+            } else {
+                ['wr1-power', 'wr2-power', 'wr3-power'].forEach(id => document.getElementById(id).innerText = "0.0 kW");
+                ['wr1-status', 'wr2-status', 'wr3-status'].forEach(id => {
+                    const el = document.getElementById(id);
+                    el.className = "px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-500 font-bold border border-slate-700";
+                    el.innerText = "NIGHT MODE";
+                });
+            }
+
+            // 4. Energie-Akkumulation (Ertrag Heute)
+            if (currentPower > 0) {
+                todayEnergy += (currentPower / 1000) * (3 / 3600);
+            }
+            document.getElementById('live-today').innerText = todayEnergy.toFixed(4);
+
+            // 5. CO2-Vermeidung & Umsatzberechnung
+            const co2Saved = todayEnergy * 400;
+            const revenue = todayEnergy * 1000 * 0.082;
+            document.getElementById('live-co2').innerText = Math.round(co2Saved).toLocaleString('de-DE') + " kg";
+            document.getElementById('live-revenue').innerText = revenue.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+            // 6. Batteriespeicher Steuerungs-Logik (BESS Management)
+            const bStatus = document.getElementById('battery-status');
+            let battChargeKw = 0;
+            let battDischargeKw = 0;
+            let newBatteryStatus;
+
+            if (currentPower > 650 && batterySoc < 100) {
+                batterySoc += 0.05;
+                battChargeKw = Math.min(0.15 * currentPower, 150);
+                newBatteryStatus = "LÄDT";
+                bStatus.innerText = "LÄDT";
+                bStatus.className = "text-[10px] text-cyan-400 px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20 font-semibold animate-pulse";
+            } else if ((currentPower < 150 || currentHour >= 18) && batterySoc > 5) {
+                batterySoc -= 0.03;
+                battDischargeKw = 80;
+                newBatteryStatus = "EINSPEISUNG";
+                bStatus.innerText = "EINSPEISUNG";
+                bStatus.className = "text-[10px] text-orange-400 px-2 py-0.5 rounded-full bg-orange-500/10 border border-orange-500/20 font-semibold animate-pulse";
+            } else {
+                newBatteryStatus = "STANDBY";
+                bStatus.innerText = "STANDBY";
+                bStatus.className = "text-[10px] text-slate-400 px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 font-semibold";
+            }
+            if (batterySoc > 100) batterySoc = 100;
+            if (batterySoc < 0) batterySoc = 0;
+            document.getElementById('battery-soc').innerText = batterySoc.toFixed(1);
+            document.getElementById('battery-bar').style.width = `${batterySoc}%`;
+
+            if (newBatteryStatus !== previousBatteryStatus) {
+                const messages = {
+                    'LÄDT': 'Batteriespeicher beginnt Ladevorgang (Überschussleistung erkannt)',
+                    'EINSPEISUNG': 'Batteriespeicher speist gespeicherte Energie ins Netz ein',
+                    'STANDBY': 'Batteriespeicher wechselt in Standby'
+                };
+                logEvent(messages[newBatteryStatus] || 'Batteriestatus geändert', 'info');
+                previousBatteryStatus = newBatteryStatus;
+            }
+
+            // 6b. Netzfluss (Export/Import) inkl. Hilfsbetrieb
+            const gridFlowKw = currentPower - battChargeKw - auxLoadKw + battDischargeKw;
+            const gridBadge = document.getElementById('grid-flow-badge');
+            const gridDirection = gridFlowKw >= 0 ? 'EXPORT' : 'IMPORT';
+            document.getElementById('live-grid-power').innerText = Math.abs(gridFlowKw).toFixed(1);
+            if (gridDirection === 'EXPORT') {
+                gridBadge.innerText = 'EINSPEISUNG';
+                gridBadge.className = 'text-[10px] text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 font-semibold';
+            } else {
+                gridBadge.innerText = 'NETZBEZUG';
+                gridBadge.className = 'text-[10px] text-rose-400 px-2 py-0.5 rounded-full bg-rose-500/10 border border-rose-500/20 font-semibold animate-pulse';
+            }
+            if (gridDirection !== previousGridDirection) {
+                if (gridDirection === 'IMPORT') {
+                    logEvent('Netzbezug aktiv – Batteriespeicher leer, Hilfsbetrieb wird aus dem Netz versorgt', 'warning');
+                } else {
+                    logEvent('Anlage speist wieder Energie ins Übertragungsnetz ein', 'success');
+                }
+                previousGridDirection = gridDirection;
+            }
+
+            // 6c. Netzfrequenz-Simulation (Random Walk um 50.00 Hz)
+            gridFrequency += (Math.random() - 0.5) * 0.01;
+            gridFrequency = Math.max(49.90, Math.min(50.10, gridFrequency));
+            document.getElementById('live-freq').innerText = gridFrequency.toFixed(2) + ' Hz';
+
+            // 7. Energiefluss-Diagramm aktualisieren
+            updateFlowDiagram(currentPower, battChargeKw, battDischargeKw, gridFlowKw);
+
+            // 8. DC-Strang-Matrix aktualisieren
+            updateStringGrid(currentPower);
+
+            // 9. Realtime Chart Updates
+            updateRealtimeChart(currentPower);
+
+            // 10. Kurzfristprognose (nur alle ~10 Takte neu berechnen, spart unnötige Arbeit)
+            if (simTick % 10 === 0) {
+                updateForecast();
+            }
+
+            // 11. Verfügbarkeit: leichte Schwankung um 99.8%, sinkt kurzzeitig bei Strangfehlern
+            const anyFault = stringFaultUntil.some(t => t > simTick);
+            const availability = anyFault ? 99.2 + Math.random() * 0.3 : 99.7 + Math.random() * 0.25;
+            document.getElementById('live-availability').innerText = availability.toFixed(1) + '%';
+        }
+
+        // ============================================================
+        // DATA CHARTS CENTER (CHART.JS)
+        // ============================================================
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.font.family = 'ui-sans-serif, system-ui, sans-serif';
+
+        const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
+        const realtimeChart = new Chart(ctxRealtime, {
+            type: 'line',
+            data: {
+                labels: Array(10).fill(''),
+                datasets: [{
+                    label: 'Aktuelle Last',
+                    data: Array(10).fill(basePower),
+                    borderColor: '#f59e0b',
+                    borderWidth: 2,
+                    pointRadius: 1,
+                    fill: true,
+                    backgroundColor: 'rgba(245, 158, 11, 0.05)',
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: 'rgba(255,255,255,0.03)' }, min: 0, max: 1250 },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+
+        function updateRealtimeChart(currentVal) {
+            realtimeChart.data.datasets[0].data.push(currentVal);
+            realtimeChart.data.datasets[0].data.shift();
+            realtimeChart.update('none');
+        }
+
+        const ctxWeekly = document.getElementById('weeklyChart').getContext('2d');
+        const weeklyChart = new Chart(ctxWeekly, {
+            type: 'bar',
+            data: {
+                labels: ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'],
+                datasets: [{
+                    data: [5.2, 4.8, 6.1, 3.9, 7.2, 6.8, 5.5],
+                    backgroundColor: 'rgba(234, 179, 8, 0.6)',
+                    borderColor: 'rgba(234, 179, 8, 0.9)',
+                    borderWidth: 1.5,
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: 'rgba(255,255,255,0.03)' }, beginAtZero: true },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+
+        const ctxYearly = document.getElementById('yearlyChart').getContext('2d');
+        const gradient = ctxYearly.createLinearGradient(0, 0, 0, 200);
+        gradient.addColorStop(0, 'rgba(16, 185, 129, 0.25)');
+        gradient.addColorStop(1, 'rgba(16, 185, 129, 0.0)');
+
+        const yearlyChart = new Chart(ctxYearly, {
+            type: 'line',
+            data: {
+                labels: ['Jan', 'Feb', 'Mrz', 'Apr', 'Mai', 'Jun', 'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dez'],
+                datasets: [{
+                    label: 'Ist-Ertrag (MWh)',
+                    data: [45, 58, 92, 125, 160, 175, 140, 0, 0, 0, 0, 0],
+                    borderColor: '#10b981',
+                    borderWidth: 2,
+                    pointBackgroundColor: '#10b981',
+                    fill: true,
+                    backgroundColor: gradient,
+                    tension: 0.25
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { grid: { color: 'rgba(255,255,255,0.03)' }, beginAtZero: true },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+
+        // ============================================================
+        // START
+        // ============================================================
+        buildStringGrid();
+        updateForecast();
+        logEvent('SCADA-System gestartet – alle Subsysteme online', 'success');
+        setInterval(simulateLiveSolarPark, 3000);
+        simulateLiveSolarPark();
+    </script>
+</body>
+</html>
